@@ -1,0 +1,154 @@
+# =============================================================================
+# Trial Balance MLOps Pipeline Configuration
+# =============================================================================
+
+catalog: main
+schema: mlops_demo
+
+# --- Data Paths ---
+data:
+  source_csv: /Workspace/Users/user@example.com/Synthetic Oracle TrialBalance/synthetic_sat_trialbalance.csv
+  bronze_table: tb_bronze
+  silver_qa_table: tb_silver_qa
+  feature_table: tb_features
+  anomaly_scores_table: tb_anomaly_scores
+  activity_predictions_table: tb_activity_predictions
+  monitor_metrics_table: tb_monitor_metrics
+
+# --- Column Definitions ---
+columns:
+  # Composite key (account grain)
+  key_cols:
+    - Company
+    - Branch
+    - Account
+    - CostCenter
+    - Product
+    - Intercompany
+   
+  # Temporal split column
+  period_col: AccountingPeriod
+   
+  # Financial columns
+  balance_cols:
+    - BeginningBalance
+    - PeriodDebit
+    - PeriodCredit
+    - PeriodActivity
+    - EndingBalance
+   
+  # Features for ACTIVITY model (no leakage - exclude period activity/ending)
+  activity_model_features:
+    - BeginningBalance
+    - Company
+    - Branch
+    - Account
+    - CostCenter
+    - Product
+    - Intercompany
+    # Engineered features added at runtime:
+    # - period_ordinal
+    # - balance_quartile
+    # - peer_group_mean_balance
+    # - peer_group_std_balance
+    # - account_historical_activity_rate
+   
+  # Signals for ANOMALY model (these ARE the scored signals, not predictive features)
+  anomaly_signals:
+    - PeriodActivity
+    - EndingBalance
+    # Engineered at runtime:
+    # - balance_change_ratio
+    # - peer_group_z_score
+    # - activity_to_balance_ratio
+   
+  # Metadata columns (excluded from modeling)
+  meta_cols:
+    - Ledger
+    - CurrencyCode
+    - LoadDate
+    - LoadEndDate
+    - CurrentRecordFlag
+    - FileName
+    - FileDate
+
+# --- Split Strategy ---
+split:
+  method: temporal  # NEVER random shuffle
+  train_period: "4-2026"
+  validate_period: "5-2026"
+  test_period: "6-2026"
+  # Future: split by FileDate snapshot for production
+
+# --- Rules Layer (Hard Checks) ---
+rules:
+  identity_tolerance: 1.0e-6  # max abs error for EndBal = BegBal + Activity
+  sign_flip_threshold: 0.0    # flag if sign(EndBal) != sign(BegBal) and |Activity| < |BegBal| * 0.5
+  orphan_activity:
+    # Flag: activity > 0 where BeginBal = 0 AND <5% of peer group has activity
+    peer_activity_pct_threshold: 0.05
+    min_peer_group_size: 3
+
+# --- Anomaly Model (Isolation Forest) ---
+anomaly_model:
+  name: tb_anomaly
+  model_type: IsolationForest
+  params:
+    n_estimators: 200
+    contamination: 0.05
+    max_samples: "auto"
+    random_state: 42
+  # Proxy label evaluation
+  evaluation:
+    precision_at_k: [50, 100, 200]
+    proxy_sources:
+      - rules_flags       # rows flagged by hard rules
+      - extreme_pct: 0.05 # top 5% extreme movements
+      - spiked_synthetic: true  # inject synthetic anomalies for held-out eval
+    min_precision_at_50: 0.60  # champion gate threshold
+
+# --- Activity Model (LightGBM) ---
+activity_model:
+  name: tb_activity
+  model_type: LightGBM
+  params:
+    objective: binary
+    metric: average_precision
+    n_estimators: 300
+    max_depth: 6
+    learning_rate: 0.05
+    scale_pos_weight: 40  # ~2.4% positive class → ~40:1 imbalance
+    num_leaves: 31
+    min_child_samples: 10
+    random_state: 42
+  evaluation:
+    baseline: always_inactive  # 97.6% accuracy
+    min_f1_above_baseline: 0.10  # must beat baseline F1 by at least this
+    min_pr_auc: 0.15
+    min_recall_minority: 0.30
+
+# --- Champion Gate ---
+champion_gate:
+  identity_max_fail_rate: 0.001  # ≈ 0
+  activity_beats_baseline: true
+  anomaly_min_precision_at_50: 0.60
+  require_all: true  # all conditions must pass to promote
+
+# --- Model Registry ---
+registry:
+  catalog: main
+  schema: mlops_demo
+  anomaly_model_name: tb_anomaly_model
+  activity_model_name: tb_activity_model
+
+# --- Monitoring ---
+monitoring:
+  drift_method: PSI  # Population Stability Index
+  psi_threshold: 0.20  # > 0.20 triggers retrain
+  prediction_shift_threshold: 0.15  # % change in positive prediction rate
+  staleness_periods: 3  # retrain if model hasn't been updated in N periods
+  
+# --- Compute ---
+compute:
+  preferred: personal_cluster
+  fallback: serverless

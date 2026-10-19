@@ -1,0 +1,31 @@
+resources:
+  jobs:
+    tb_score:
+      name: "[${bundle.target}] Trial Balance — Batch Score & Monitor"
+      description: |
+        Batch scoring pipeline: Score both models on latest data → Write to gold tables → Monitor drift.
+        Scheduled to run after each period close (monthly).
+
+      tasks:
+        - task_key: batch_score
+          notebook_task:
+            notebook_path: ../notebooks/05_batch_score.py
+
+        - task_key: monitor_retrain
+          depends_on:
+            - task_key: batch_score
+          notebook_task:
+            notebook_path: ../notebooks/06_monitor_retrain.py
+
+      schedule:
+        quartz_cron_expression: "0 0 8 2 * ?"
+        timezone_id: America/Los_Angeles
+
+      tags:
+        project: mlops-demo
+        team: data-science
+        pipeline_stage: scoring
+
+      email_notifications:
+        on_failure:
+          - user@example.com

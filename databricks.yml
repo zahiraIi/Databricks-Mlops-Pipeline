@@ -1,0 +1,47 @@
+# Declarative Automation Bundle — Trial Balance MLOps
+bundle:
+  name: mlops-demo
+
+include:
+  - resources/*.yml
+
+workspace:
+  root_path: /Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
+
+variables:
+  catalog:
+    description: Unity Catalog name for all tables and models
+    default: main
+  schema:
+    description: Schema for tables and models
+    default: mlops_demo
+  sp_name:
+    description: Service principal for production runs
+    default: ""
+
+targets:
+  dev:
+    mode: development
+    default: true
+    workspace:
+      host: https://adb-0000000000000000.0.azuredatabricks.net
+    variables:
+      catalog: main
+      schema: mlops_demo
+
+  staging:
+    workspace:
+      host: https://adb-0000000000000000.0.azuredatabricks.net
+    variables:
+      catalog: main
+      schema: mlops_demo
+
+  prod:
+    mode: production
+    workspace:
+      host: https://adb-0000000000000000.0.azuredatabricks.net
+    run_as:
+      service_principal_name: ${var.sp_name}
+    variables:
+      catalog: main
+      schema: mlops_demo

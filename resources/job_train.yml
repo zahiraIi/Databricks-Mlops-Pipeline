@@ -1,0 +1,51 @@
+resources:
+  jobs:
+    tb_train:
+      name: "[${bundle.target}] Trial Balance — Train Pipeline"
+      description: |
+        End-to-end training pipeline: Ingest → QA → Features → Train (anomaly + activity) → Evaluate → Register.
+        Triggered on new data arrival or by retrain signal from monitoring.
+      
+      tasks:
+        - task_key: ingest
+          notebook_task:
+            notebook_path: ../notebooks/00_ingest.py
+ 
+        - task_key: clean_identity_qa
+          depends_on:
+            - task_key: ingest
+          notebook_task:
+            notebook_path: ../notebooks/01_clean_identity_qa.py
+ 
+        - task_key: feature_engineering
+          depends_on:
+            - task_key: clean_identity_qa
+          notebook_task:
+            notebook_path: ../notebooks/02_feature_engineering.py
+ 
+        - task_key: train_anomaly
+          depends_on:
+            - task_key: feature_engineering
+          notebook_task:
+            notebook_path: ../notebooks/03a_train_anomaly.py
+ 
+        - task_key: train_activity
+          depends_on:
+            - task_key: feature_engineering
+          notebook_task:
+            notebook_path: ../notebooks/03b_train_activity.py
+ 
+        - task_key: evaluate_and_register
+          depends_on:
+            - task_key: train_anomaly
+            - task_key: train_activity
+          notebook_task:
+            notebook_path: ../notebooks/04_evaluate_and_register.py
+ 
+      tags:
+        project: mlops-demo
+        team: data-science
+        
+      email_notifications:
+        on_failure:
+          - user@example.com
